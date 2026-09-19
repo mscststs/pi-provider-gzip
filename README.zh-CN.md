@@ -168,7 +168,7 @@ npm test           # 仅 node --test
 
 ```
 extensions/
-  gzip-request-body.ts   # pi 扩展入口（仅做接线）
+  index.ts               # pi 扩展入口（仅做接线）
 lib/
   config.ts              # 总开关 + 调优（纯函数）
   hosts.ts               # 模型注册表 -> host allowlist（纯函数）

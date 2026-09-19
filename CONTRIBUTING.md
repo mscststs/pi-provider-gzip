@@ -27,7 +27,7 @@ npm run check       # both
 
 | Path | Purpose |
 | --- | --- |
-| `extensions/gzip-request-body.ts` | pi extension entry point — wiring only |
+| `extensions/index.ts` | pi extension entry point — wiring only |
 | `lib/config.ts` | master switch + tuning, no pi imports |
 | `lib/hosts.ts` | model registry → host allowlist, no pi imports |
 | `lib/gzip-fetch.ts` | the `fetch` wrapper, no pi imports |

@@ -178,7 +178,7 @@ npm test           # node --test only
 
 ```
 extensions/
-  gzip-request-body.ts   # pi extension entry point (wiring only)
+  index.ts               # pi extension entry point (wiring only)
 lib/
   config.ts              # master switch + tuning (pure)
   hosts.ts               # model registry -> host allowlist (pure)
