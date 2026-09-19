@@ -1,6 +1,6 @@
 {
   "name": "@mscststs/pi-provider-gzip",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Pi extension that compresses model request bodies (gzip, Brotli, Zstandard) to cut time-to-first-token on slow LLM gateways.",
   "type": "module",
   "license": "MIT",
