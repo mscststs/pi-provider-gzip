@@ -13,7 +13,7 @@ test("compresses through the global fetch and restores on uninstall", async () =
   globalThis.fetch = fake;
   try {
     installFetchInterceptor({
-      enabledHosts: new Set(["relay.example"]),
+      targets: new Map([["relay.example", "gzip"]]),
       minBytes: 1,
       level: 6,
       debug: false,
@@ -26,9 +26,23 @@ test("compresses through the global fetch and restores on uninstall", async () =
     });
     assert.equal(new Headers(captured.at(-1)?.init?.headers).get("content-encoding"), "gzip");
 
-    // Re-installing updates the allowlist without stacking wrappers.
+    // Re-installing updates the map without stacking wrappers.
     installFetchInterceptor({
-      enabledHosts: new Set(),
+      targets: new Map([["relay.example", "br"]]),
+      minBytes: 1,
+      level: 6,
+      debug: false,
+      log: () => {},
+    });
+    await globalThis.fetch("https://relay.example/v1/chat/completions", {
+      method: "POST",
+      body: "x".repeat(100),
+    });
+    assert.equal(new Headers(captured.at(-1)?.init?.headers).get("content-encoding"), "br");
+
+    // ...and an empty map turns compression off again.
+    installFetchInterceptor({
+      targets: new Map(),
       minBytes: 1,
       level: 6,
       debug: false,

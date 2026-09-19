@@ -2,12 +2,12 @@
  * Process-wide `fetch` interceptor.
  *
  * Installed once per process and re-configured on every `session_start` so the
- * host allowlist follows the active model registry. The original `fetch` is
- * stored on `globalThis` under a symbol, which makes repeated installs
+ * host -> encoding map follows the active model registry. The original `fetch`
+ * is stored on `globalThis` under a symbol, which makes repeated installs
  * (extension reloads, multiple sessions) idempotent instead of nesting
  * wrappers.
  */
-import { createGzipFetch, type GzipFetchConfig } from "./gzip-fetch.ts";
+import { createCompressionFetch, type CompressionFetchConfig } from "./compress-fetch.ts";
 
 const STATE_KEY = Symbol.for("pi-provider-gzip.interceptor");
 
@@ -19,8 +19,8 @@ function getState(): InterceptorState | undefined {
   return (globalThis as unknown as Record<symbol, unknown>)[STATE_KEY] as InterceptorState | undefined;
 }
 
-/** Install or update the gzip interceptor. Safe to call repeatedly. */
-export function installFetchInterceptor(config: GzipFetchConfig): void {
+/** Install or update the compression interceptor. Safe to call repeatedly. */
+export function installFetchInterceptor(config: CompressionFetchConfig): void {
   const existing = getState();
   const originalFetch = existing?.originalFetch ?? globalThis.fetch;
 
@@ -28,7 +28,7 @@ export function installFetchInterceptor(config: GzipFetchConfig): void {
     (globalThis as unknown as Record<symbol, unknown>)[STATE_KEY] = { originalFetch };
   }
 
-  globalThis.fetch = createGzipFetch({ ...config, baseFetch: originalFetch });
+  globalThis.fetch = createCompressionFetch({ ...config, baseFetch: originalFetch });
 }
 
 /** Restore the original `fetch`. Primarily useful for tests. */

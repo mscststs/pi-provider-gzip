@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-20
+
+### Added
+
+- Per-provider request-body encoding via `"compat": { "encoding": "gzip" | "br" | "zstd" }`.
+  Missing or unrecognized values fall back to gzip. Aliases `brotli` and
+  `zstandard` are accepted.
+- `lib/encodings.ts` with the gzip/Brotli/Zstandard codecs, level mapping and a
+  runtime capability check (a `zstd` request on Node < 22.15 falls back to gzip).
+- `scripts/probe-encodings.mjs` to probe which encodings a provider accepts.
+
+### Changed
+
+- Renamed the fetch wrapper module `lib/gzip-fetch.ts` to
+  `lib/compress-fetch.ts` (export `createCompressionFetch`) and
+  `lib/hosts.ts`'s `resolveEnabledHosts` to `resolveCompressionTargets`, which
+  now returns a `host -> encoding` map.
+- Debug log lines now include the encoding, e.g.
+  `[pi-provider-gzip] relay.example br 2708795 -> 502144 bytes (5.4x)`.
+- The extension entry point is now `compressRequestBody` (was `gzipRequestBody`).
+
 ## [0.1.1] - 2026-09-19
 
 ### Changed
@@ -39,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node:http transport and SigV4 payload signing.
 - WebSocket transports, which bypass `fetch`.
 
-[Unreleased]: https://github.com/mscststs/pi-provider-gzip/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/mscststs/pi-provider-gzip/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mscststs/pi-provider-gzip/releases/tag/v0.2.0
 [0.1.1]: https://github.com/mscststs/pi-provider-gzip/releases/tag/v0.1.1
 [0.1.0]: https://github.com/mscststs/pi-provider-gzip/releases/tag/v0.1.0

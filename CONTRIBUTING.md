@@ -29,8 +29,9 @@ npm run check       # both
 | --- | --- |
 | `extensions/index.ts` | pi extension entry point — wiring only |
 | `lib/config.ts` | master switch + tuning, no pi imports |
-| `lib/hosts.ts` | model registry → host allowlist, no pi imports |
-| `lib/gzip-fetch.ts` | the `fetch` wrapper, no pi imports |
+| `lib/encodings.ts` | gzip/br/zstd codecs and fallback, no pi imports |
+| `lib/hosts.ts` | model registry → host/encoding map, no pi imports |
+| `lib/compress-fetch.ts` | the `fetch` wrapper, no pi imports |
 | `lib/interceptor.ts` | idempotent global install/uninstall |
 | `test/` | `node:test` suites for `lib/` |
 | `docs/benchmarks.md` | measurement notes |
@@ -42,10 +43,11 @@ needs the pi extension API in `extensions/`.
 
 - **One master switch.** `PI_GZIP=0` disables the extension; there are no
   environment allowlists. Per-provider opt-out is
-  `"compat": { "gzip": false }` in `models.json`.
+  `"compat": { "gzip": false }` in `models.json`, and the per-provider codec is
+  `"compat": { "encoding": "br" }` (gzip default, invalid values fall back).
 - **Transport-level hook.** We patch `globalThis.fetch` once and scope it with a
-  host allowlist from `ctx.modelRegistry.getAll()`. This is what lets one hook
-  cover every fetch-based API, built-in and user-defined alike.
+  host → encoding map from `ctx.modelRegistry.getAll()`. This is what lets one
+  hook cover every fetch-based API, built-in and user-defined alike.
 - **Idempotent installs.** The original `fetch` is kept on `globalThis` under a
   symbol so re-installs (reload, new session) reconfigure instead of nesting
   wrappers.

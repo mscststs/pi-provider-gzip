@@ -2,8 +2,9 @@
 
 # pi-provider-gzip
 
-一个 [pi](https://pi.dev) 扩展，通过 **gzip 压缩模型请求体**，在那些接收大请求体缓慢的
-LLM 网关上降低首 token 延迟（TTFT）。
+一个 [pi](https://pi.dev) 扩展，通过 **压缩模型请求体**，在那些接收大请求体缓慢的
+LLM 网关上降低首 token 延迟（TTFT）。默认使用 gzip；Brotli（`br`）与 Zstandard（`zstd`）
+可按 provider 选用。
 
 ```
 before:  2.7 MB request body  ──►  gateway chews on it  ──►  ~55–80 s TTFT
@@ -14,6 +15,7 @@ after:   0.75 MB gzip body    ──►  gateway chews on it  ──►  ~12–2
 - **默认对所有 provider 生效** —— 无需 allowlist，无需逐 provider 配置。
 - **按 provider 退出** 写在 provider 自身的设置里：
   `"compat": { "gzip": false }`。
+- **按 provider 选择算法**：`"compat": { "encoding": "br" }`。未配置或值不合法时回退到 gzip。
 
 > **为什么有用？** 许多模型中转站（new-api、one-api、LiteLLM 代理、企业网关……）在派发
 > 请求前会做与**接收字节数成正比**的工作 —— token 计数、配额预检查、请求体日志、WAF
@@ -63,8 +65,12 @@ PI_GZIP=0 pi        # 临时禁用全部
 
 ```bash
 PI_GZIP_DEBUG=1 pi
-# [pi-provider-gzip] relay.example 2708795 -> 753098 bytes (3.6x)
+# [pi-provider-gzip] relay.example gzip 2708795 -> 753098 bytes (3.6x)
+# [pi-provider-gzip] relay.example br   2708795 -> 502144 bytes (5.4x)
 ```
+
+级别在所有算法间共享，并映射到各自的取值范围（`0`–`9` → gzip level、Brotli quality
+`0`–`11`、Zstandard level `1`–`19`）。
 
 ### 按 provider 退出
 
@@ -98,18 +104,51 @@ PI_GZIP_DEBUG=1 pi
 > `compat` 是 pi 暴露给扩展的唯一 provider 级字段，因此开关放在这里。
 > `compat: { "gzip": false }` 表示退出；其他情况一律启用。
 
+### 按 provider 选择算法
+
+部分中转站（new-api、one-api 等）也支持解压 Brotli 或 Zstandard 请求体。这两种算法通常比
+gzip 再小 15–35%，网关支持时值得开启：
+
+```json
+{
+  "providers": {
+    "my-relay": {
+      "baseUrl": "https://relay.example/v1",
+      "api": "openai-completions",
+      "apiKey": "...",
+      "models": [{ "id": "my-model", "name": "my-model", "contextWindow": 128000 }],
+      "compat": { "encoding": "br" }
+    }
+  }
+}
+```
+
+| `compat.encoding` | 发送的 `Content-Encoding` |
+| ----------------- | ------------------------- |
+| 缺省 / `gzip`     | `gzip`（默认）            |
+| `br` / `brotli`   | `br`                      |
+| `zstd` / `zstandard` | `zstd`                  |
+
+其他任何值 —— 未知字符串、空值、非字符串，或当前 Node.js 不提供的算法 —— 一律**回退到
+gzip**。`compat.gzip: false` 优先于 `compat.encoding`，会直接为该 provider 关闭压缩。
+
+> 并非所有中转站都接受 Brotli/Zstandard，而不支持的算法会返回 `400 Bad Request`
+> （与之相对，未知的*值*会被忽略）。切换前可用 `scripts/probe-encodings.mjs` 探测目标
+> provider 支持哪些算法。
+
 ## 工作原理
 
 在 `session_start` 时，扩展读取 pi 的实时模型注册表，从所有已配置的 provider 构建一份
-host allowlist，并安装**一个进程级的 `fetch` 拦截器**。仅当以下条件**全部**满足时，拦截器
-才会压缩请求：
+host -> encoding 映射，并安装**一个进程级的 `fetch` 拦截器**。仅当以下条件**全部**满足时，
+拦截器才会压缩请求：
 
 1. 方法是 `POST`；
-2. 目标 host 在 allowlist 中（且未被退出）；
+2. 目标 host 在映射中（且未被退出）；
 3. 请求体是字符串，且长度不小于 `PI_GZIP_MIN_BYTES`。
 
-随后它会 gzip 压缩请求体、设置 `Content-Encoding: gzip`，并删除过时的 `Content-Length`，
-让 HTTP 栈重新计算。其他请求一律原样转发。网关会透明解压；模型看到的 JSON 完全一致。
+随后它会用该 host 的算法压缩请求体（默认 gzip，除非 `compat.encoding` 另有指定）、设置
+`Content-Encoding`，并删除过时的 `Content-Length`，让 HTTP 栈重新计算。其他请求一律
+原样转发。网关会透明解压；模型看到的 JSON 完全一致。
 
 因为钩子位于传输层，它覆盖 **pi 支持的所有基于 fetch 的 API**，无论 provider 是内置还是
 用户自定义：
@@ -127,9 +166,12 @@ Bedrock 使用 AWS SDK 的 node:http 传输和 SigV4 签名；WebSocket 传输�
 
 ## 兼容性
 
-- **服务端必须接受请求体上的 `Content-Encoding: gzip`。** 大多数网关都支持。若某
-  provider 以 `400` 拒绝，请为该 provider 添加 `"compat": { "gzip": false }`。
-- **Node：** 需要 Node 22.6+（pi 内置兼容的运行时）。
+- **服务端必须接受我们发送的 `Content-Encoding` 请求体**（默认 `gzip`，或该 provider 的
+  `compat.encoding`）。多数网关接受 gzip，接受 Brotli/Zstandard 的较少。若某 provider 以
+  `400` 拒绝所选算法，请改用其他 `compat.encoding`，或用 `"compat": { "gzip": false }`
+  关闭压缩。
+- **Node：** 需要 Node 22.6+（pi 内置兼容的运行时）。Zstandard 需要 Node 22.15+；在更低版本
+  上 `zstd` 请求会自动回退到 gzip。
 
 ## 基准测试
 
@@ -151,7 +193,7 @@ Bedrock 使用 AWS SDK 的 node:http 传输和 SigV4 签名；WebSocket 传输�
 
 | 现象 | 可能原因 | 解决 |
 | --- | --- | --- |
-| 某 provider 返回 `400 Bad Request` | 它不接受 gzip 请求体 | 为该 provider 添加 `"compat": { "gzip": false }`，或设置 `PI_GZIP=0` |
+| 某 provider 返回 `400 Bad Request` | 它不接受所选 `Content-Encoding`，或编码名拼写错误 | 设为合法的 `"compat": { "encoding": "gzip" }`，或用 `"compat": { "gzip": false }` 退出，或 `PI_GZIP=0` |
 | TTFT 没有变化 | 请求体本来就小，或中转站在计费前就解压了 | 用 `PI_GZIP_DEBUG=1` 检查；收益随请求体大小增长 |
 | `Failed to load extension` | Pi 版本不提供此处使用的扩展 API | 升级 pi |
 | Bedrock 请求从不被压缩 | AWS SDK 传输，不在范围内 | 预期行为 |
@@ -171,11 +213,13 @@ extensions/
   index.ts               # pi 扩展入口（仅做接线）
 lib/
   config.ts              # 总开关 + 调优（纯函数）
-  hosts.ts               # 模型注册表 -> host allowlist（纯函数）
-  gzip-fetch.ts          # fetch 包装器（纯函数）
+  encodings.ts           # gzip/br/zstd 编解码 + 回退（纯函数）
+  hosts.ts               # 模型注册表 -> host/encoding 映射（纯函数）
+  compress-fetch.ts      # fetch 包装器（纯函数）
   interceptor.ts         # 幂等的全局 fetch 安装/卸载
 test/                    # node:test 测试套件
 docs/benchmarks.md       # 测量记录
+scripts/probe-encodings.mjs  # 探测 provider 支持哪些压缩算法
 ```
 
 ## 许可证

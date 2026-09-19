@@ -2,9 +2,10 @@
 
 # pi-provider-gzip
 
-A [pi](https://pi.dev) extension that **gzip-compresses model request bodies**
-to cut time-to-first-token (TTFT) on LLM gateways that ingest large request
-bodies slowly.
+A [pi](https://pi.dev) extension that **compresses model request bodies** to cut
+time-to-first-token (TTFT) on LLM gateways that ingest large request bodies
+slowly. Gzip is the default; Brotli (`br`) and Zstandard (`zstd`) are opt-in per
+provider.
 
 ```
 before:  2.7 MB request body  ──►  gateway chews on it  ──►  ~55–80 s TTFT
@@ -15,6 +16,8 @@ after:   0.75 MB gzip body    ──►  gateway chews on it  ──►  ~12–2
 - **Works for every provider by default** — no allowlists, no per-provider setup.
 - **Per-provider opt-out** lives in the provider's own settings:
   `"compat": { "gzip": false }`.
+- **Per-provider encoding** selects the algorithm: `"compat": { "encoding": "br" }`.
+  Missing or unrecognized values fall back to gzip.
 
 > **Why does this help?** Many model relays (new-api, one-api, LiteLLM proxies,
 > corporate gateways …) do work proportional to the **received byte count**
@@ -66,8 +69,12 @@ Advanced tuning (rarely needed):
 
 ```bash
 PI_GZIP_DEBUG=1 pi
-# [pi-provider-gzip] relay.example 2708795 -> 753098 bytes (3.6x)
+# [pi-provider-gzip] relay.example gzip 2708795 -> 753098 bytes (3.6x)
+# [pi-provider-gzip] relay.example br   2708795 -> 502144 bytes (5.4x)
 ```
+
+The level is shared across codecs and mapped onto each codec's native scale
+(`0`–`9` → gzip level, Brotli quality `0`–`11`, Zstandard level `1`–`19`).
 
 ### Per-provider opt-out
 
@@ -99,21 +106,57 @@ alone is a valid provider entry:
 ```
 
 > `compat` is the only provider-level field pi exposes to extensions, so it is
-> where the switch lives. `compat: { "gzip": false }` is an opt-out; everything
+> where the switches live. `compat: { "gzip": false }` is an opt-out; everything
 > else is enabled.
+
+### Per-provider encoding
+
+Some relays (new-api, one-api, …) also decode request bodies compressed with
+Brotli or Zstandard. Those algorithms usually shrink JSON transcripts 15–35%
+more than gzip, so they are worth opting into when the gateway supports them:
+
+```json
+{
+  "providers": {
+    "my-relay": {
+      "baseUrl": "https://relay.example/v1",
+      "api": "openai-completions",
+      "apiKey": "...",
+      "models": [{ "id": "my-model", "name": "my-model", "contextWindow": 128000 }],
+      "compat": { "encoding": "br" }
+    }
+  }
+}
+```
+
+| `compat.encoding` | `Content-Encoding` sent |
+| ----------------- | ----------------------- |
+| absent / `gzip`   | `gzip` (default)        |
+| `br` / `brotli`   | `br`                    |
+| `zstd` / `zstandard` | `zstd`               |
+
+Anything else — an unknown string, an empty value, a non-string, or a codec the
+running Node.js does not provide — **falls back to gzip**. `compat.gzip: false`
+still wins over `compat.encoding` and disables compression for that provider.
+
+> Not all relays accept Brotli or Zstandard, and an unsupported encoding is
+> rejected with `400 Bad Request` (unlike an unknown *value*, which the relay
+> ignores). `scripts/probe-encodings.mjs` checks what a given provider accepts
+> before you switch.
 
 ## How it works
 
-At `session_start` the extension reads pi's live model registry, builds a host
-allowlist from every configured provider, and installs a **single process-wide
-`fetch` interceptor**. The interceptor compresses a request only when *all* of
-these hold:
+At `session_start` the extension reads pi's live model registry, builds a
+host → encoding map from every configured provider, and installs a **single
+process-wide `fetch` interceptor**. The interceptor compresses a request only
+when *all* of these hold:
 
 1. the method is `POST`,
 2. the destination host is in the allowlist (and not opted out),
 3. the body is a string at or above `PI_GZIP_MIN_BYTES`.
 
-It then gzips the body, sets `Content-Encoding: gzip`, and drops the stale
+It then compresses the body with the host's encoding (gzip unless
+`compat.encoding` says otherwise), sets `Content-Encoding`, and drops the stale
 `Content-Length` so the HTTP stack recomputes it. Everything else is forwarded
 untouched. The gateway decompresses transparently; the model sees the exact same
 JSON.
@@ -135,10 +178,14 @@ scope.
 
 ## Compatibility
 
-- **Server must accept `Content-Encoding: gzip` on request bodies.** Most
-  gateways do. If a provider rejects it with `400`, add
-  `"compat": { "gzip": false }` to that provider.
-- **Node:** requires Node 22.6+ (pi bundles a compatible runtime).
+- **Server must accept the `Content-Encoding` we send on request bodies**
+  (`gzip` by default, or the provider's `compat.encoding`). Most gateways accept
+  gzip; fewer accept Brotli or Zstandard. If a provider rejects the chosen
+  encoding with `400`, either set a different `compat.encoding` or disable
+  compression with `"compat": { "gzip": false }`.
+- **Node:** requires Node 22.6+ (pi bundles a compatible runtime). Zstandard
+  needs Node 22.15+; on older runtimes a `zstd` request falls back to gzip
+  automatically.
 
 ## Benchmarks
 
@@ -161,7 +208,7 @@ gzipped, versus **48.6 s** for a plain 2 MB body.
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| A provider returns `400 Bad Request` | It does not accept gzip bodies | Add `"compat": { "gzip": false }` to that provider, or `PI_GZIP=0` |
+| A provider returns `400 Bad Request` | It does not accept the chosen `Content-Encoding`, or the encoding name was misspelled | Set a valid `"compat": { "encoding": "gzip" }`, or opt out with `"compat": { "gzip": false }`, or `PI_GZIP=0` |
 | No change in TTFT | Body is already small, or the relay decompresses before billing | Check `PI_GZIP_DEBUG=1`; the win scales with body size |
 | `Failed to load extension` | Pi version does not provide the extension API used here | Update pi |
 | Bedrock requests are never compressed | AWS SDK transport, out of scope | Expected |
@@ -181,11 +228,13 @@ extensions/
   index.ts               # pi extension entry point (wiring only)
 lib/
   config.ts              # master switch + tuning (pure)
-  hosts.ts               # model registry -> host allowlist (pure)
-  gzip-fetch.ts          # fetch wrapper (pure)
+  encodings.ts           # gzip/br/zstd codecs + fallback (pure)
+  hosts.ts               # model registry -> host/encoding map (pure)
+  compress-fetch.ts      # fetch wrapper (pure)
   interceptor.ts         # idempotent global fetch install/uninstall
 test/                    # node:test suites
 docs/benchmarks.md       # measurement notes
+scripts/probe-encodings.mjs  # probe which encodings a provider accepts
 ```
 
 ## License

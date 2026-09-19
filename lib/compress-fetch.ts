@@ -1,19 +1,19 @@
 /**
- * Build a `fetch` implementation that gzip-compresses request bodies before
- * they leave the process.
+ * Build a `fetch` implementation that compresses request bodies (gzip, Brotli
+ * or Zstandard) before they leave the process.
  *
  * Free of any pi imports so it can be unit-tested with plain `node --test`.
  */
-import { gzipSync } from "node:zlib";
+import { compressBody, pickEncoding, type Encoding } from "./encodings.ts";
 
 export type RequestLogger = (message: string) => void;
 
-export interface GzipFetchConfig {
-  /** Hosts allowed to receive compressed bodies (see `lib/hosts.ts`). */
-  enabledHosts: ReadonlySet<string>;
+export interface CompressionFetchConfig {
+  /** Hosts allowed to receive compressed bodies, mapped to their encoding. */
+  targets: ReadonlyMap<string, Encoding>;
   /** Bodies smaller than this many bytes are sent as-is. */
   minBytes: number;
-  /** zlib compression level. */
+  /** Shared `0`-`9` compression level, mapped per codec. */
   level: number;
   /** When true, emit a debug line per compression. */
   debug: boolean;
@@ -21,7 +21,7 @@ export interface GzipFetchConfig {
   log?: RequestLogger;
 }
 
-export interface GzipFetchOptions extends GzipFetchConfig {
+export interface CompressionFetchOptions extends CompressionFetchConfig {
   /** Underlying fetch. Defaults to `globalThis.fetch`. */
   baseFetch?: typeof fetch;
 }
@@ -48,39 +48,42 @@ function isCompressibleBody(body: unknown): body is string {
 }
 
 /**
- * Wrap `baseFetch` so string POST bodies at or above `minBytes`, addressed to
- * an enabled host, are gzip-compressed and tagged with
- * `Content-Encoding: gzip`.
+ * Wrap `baseFetch` so string POST bodies at or above `minBytes`, addressed to a
+ * configured host, are compressed and tagged with the host's `Content-Encoding`.
+ *
+ * The encoding is requested per host via `compat.encoding`; if the runtime
+ * cannot produce it (or the value was invalid), it silently falls back to gzip.
  *
  * Everything else (other methods, other hosts, non-string bodies, small
  * payloads) is forwarded untouched.
  */
-export function createGzipFetch(options: GzipFetchOptions): typeof fetch {
+export function createCompressionFetch(options: CompressionFetchOptions): typeof fetch {
   const baseFetch = options.baseFetch ?? globalThis.fetch;
   const log = options.log ?? ((message: string) => process.stderr.write(message));
 
-  return function gzipFetch(input, init) {
+  return function compressionFetch(input, init) {
     const requestInit = init as RequestInit | undefined;
     const body = requestInit?.body;
     const host = requestHost(input);
+    const requested = host !== undefined ? options.targets.get(host) : undefined;
 
     if (
-      host !== undefined &&
-      options.enabledHosts.has(host) &&
+      requested !== undefined &&
       requestMethod(input, requestInit) === "POST" &&
       isCompressibleBody(body) &&
       body.length >= options.minBytes
     ) {
-      const compressed = gzipSync(Buffer.from(body, "utf8"), { level: options.level });
+      const encoding = pickEncoding(requested);
+      const compressed = compressBody(encoding, Buffer.from(body, "utf8"), options.level);
 
       const headers = new Headers(requestInit?.headers as HeadersInit | undefined);
-      headers.set("content-encoding", "gzip");
+      headers.set("content-encoding", encoding);
       headers.delete("content-length");
 
       if (options.debug) {
         const ratio = (body.length / compressed.length).toFixed(1);
         log(
-          `[pi-provider-gzip] ${host} ${body.length} -> ${compressed.length} bytes (${ratio}x)\n`,
+          `[pi-provider-gzip] ${host} ${encoding} ${body.length} -> ${compressed.length} bytes (${ratio}x)\n`,
         );
       }
 
