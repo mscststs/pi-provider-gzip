@@ -1,0 +1,67 @@
+{
+  "name": "@mscststs/pi-provider-gzip",
+  "version": "0.1.0",
+  "description": "Pi extension that gzip-compresses model request bodies to cut time-to-first-token on slow LLM gateways.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "gzip",
+    "compression",
+    "ttft",
+    "latency",
+    "performance",
+    "provider",
+    "fetch",
+    "interceptor"
+  ],
+  "files": [
+    "extensions",
+    "lib",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "prepublishOnly": "npm run check",
+    "release:patch": "npm version patch && git push --follow-tags",
+    "release:minor": "npm version minor && git push --follow-tags",
+    "release:major": "npm version major && git push --follow-tags"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mscststs/pi-provider-gzip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mscststs/pi-provider-gzip/issues"
+  },
+  "homepage": "https://github.com/mscststs/pi-provider-gzip#readme"
+}
